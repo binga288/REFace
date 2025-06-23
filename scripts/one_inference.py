@@ -519,6 +519,7 @@ def process_images_endpoint():
 
 
 def run_inference(scale=3.5, steps=50):
+    start_time = time.time()
     opt.ddim_steps=steps
     opt.scale=scale
     
@@ -806,6 +807,8 @@ def run_inference(scale=3.5, steps=50):
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")
 
  
 
