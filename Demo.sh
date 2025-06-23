@@ -4,10 +4,10 @@ name="One_output"
 Results_dir="examples/FaceSwap/${name}/results"
 Base_dir="examples/FaceSwap/${name}/Outs"
 Results_out="examples/FaceSwap/${name}/results/results" 
-device=6
+device=0
 
 CONFIG="models/REFace/configs/project_ffhq.yaml"
-CKPT="models/REFace/checkpoints/saved.ckpt"
+CKPT="/c/huggingface_model/REFace/last.ckpt"
 
 #change this
 target_path="examples/FaceSwap/One_target"  
