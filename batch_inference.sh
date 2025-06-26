@@ -37,6 +37,10 @@ scale=3.5
 # Number of DDIM sampling steps.
 ddim_steps=50
 
+# Set to 'true' to disable the NSFW safety checker and prevent black images.
+# Set to 'false' or leave empty to keep the safety checker enabled.
+DISABLE_SAFETY_CHECKER=true
+
 # --- 4. Pre-run Check ---
 # Check if the CSV_PATH is set and the file exists.
 if [ ! -f "$CSV_PATH" ]; then
@@ -62,13 +66,24 @@ echo "  - Config File: ${CONFIG}"
 echo "  - Checkpoint File: ${CKPT}"
 echo "  - Using Device: GPU ${device}"
 
+# Build the flag for safety checker
+if [ "$DISABLE_SAFETY_CHECKER" = "true" ]; then
+    echo "  - Safety Checker: DISABLED"
+    disable_flag="--disable_safety_checker"
+else
+    echo "  - Safety Checker: ENABLED"
+    disable_flag=""
+fi
+
+# Execute the command directly with proper quoting
 CUDA_VISIBLE_DEVICES=${device} python scripts/batch_inference_image.py \
-    --csv_path "${CSV_PATH}" \
-    --outdir "${Results_dir}" \
-    --config "${CONFIG}" \
-    --ckpt "${CKPT}" \
+    --csv_path "$CSV_PATH" \
+    --outdir "$Results_dir" \
+    --config "$CONFIG" \
+    --ckpt "$CKPT" \
     --scale ${scale} \
-    --ddim_steps ${ddim_steps}
+    --ddim_steps ${ddim_steps} \
+    $disable_flag
 
 echo "================================================="
 echo "Batch inference finished successfully."

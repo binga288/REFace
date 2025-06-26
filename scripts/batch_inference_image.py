@@ -248,10 +248,18 @@ def main():
     parser.add_argument('--segnext_config', default='', type=str, help='Path to pre-trained SegNeXt faceParser configuration file.')
     parser.add_argument('--save_vis', action='store_true')
     parser.add_argument('--seg12',default=True, action='store_true')
+    parser.add_argument('--disable_safety_checker', action='store_true', help='Disable the NSFW safety checker.')
 
     opt = parser.parse_args()
     print(opt)
     
+    # Disable safety checker if requested
+    if opt.disable_safety_checker:
+        print("NSFW safety checker is disabled by user flag.")
+        global safety_checker, safety_feature_extractor
+        safety_checker = None
+        safety_feature_extractor = None
+
     seed_everything(opt.seed)
 
     config = OmegaConf.load(f"{opt.config}")
