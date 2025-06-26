@@ -47,3 +47,4 @@ examples/FaceSwap/Source_1/*
 examples/FaceSwap/Target_1/*
 examples/FaceSwap/Swap_outs_50/*
 examples/FaceSwap/Swap_outs/*
+batch_results/*
