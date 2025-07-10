@@ -1,0 +1,13 @@
+source,target,steps
+"examples\FaceSwap\Source\elon.jpeg","examples\FaceSwap\Source\10075-00.png",5
+"examples\FaceSwap\Source\elon.jpeg","examples\FaceSwap\Source\10075-00.png",50
+"examples\FaceSwap\Source\elon.jpeg","examples\FaceSwap\Source\10076-00.png",5
+"examples\FaceSwap\Source\elon.jpeg","examples\FaceSwap\Source\10076-00.png",50
+"examples\R.jpg","examples\image-w856.jpg",5
+"examples\R.jpg","examples\image-w856.jpg",50
+"examples\FaceSwap\Source\rs_1200x1200-220504122141-1200-oscar-isaac-moon-knight.ct.jpg","examples\71iWxmst49L._UF1000,1000_QL80_.jpg",5
+"examples\FaceSwap\Source\rs_1200x1200-220504122141-1200-oscar-isaac-moon-knight.ct.jpg","examples\71iWxmst49L._UF1000,1000_QL80_.jpg",50
+"examples\5189247.jpg","examples\FaceSwap\Source\10075-00.png",5
+"examples\5189247.jpg","examples\FaceSwap\Source\10075-00.png",50
+"examples\5189247.jpg","examples\FaceSwap\Source\elon.jpeg",5
+"examples\5189247.jpg","examples\FaceSwap\Source\elon.jpeg",50
