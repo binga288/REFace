@@ -38,3 +38,5 @@ trimesh==4.4.9
 typing_extensions==4.12.2
 wandb==0.18.1
 torchmetrics==0.6.0
+face_recognition
+opencv-python
