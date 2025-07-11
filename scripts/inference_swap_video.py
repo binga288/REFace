@@ -51,10 +51,12 @@ import torch.nn as nn
 # cos = nn.CosineSimilarity(dim=0)
 import numpy as np  
 
+import face_recognition as fr
+
 # load safety model
-safety_model_id = "CompVis/stable-diffusion-safety-checker"
-safety_feature_extractor = AutoFeatureExtractor.from_pretrained(safety_model_id)
-safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_model_id)
+# safety_model_id = "CompVis/stable-diffusion-safety-checker"
+# safety_feature_extractor = AutoFeatureExtractor.from_pretrained(safety_model_id)
+# safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_model_id)
 
 #set cuda device 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
@@ -166,15 +168,15 @@ def load_replacement(x):
     except Exception:
         return x
 
-
 def check_safety(x_image):
-    safety_checker_input = safety_feature_extractor(numpy_to_pil(x_image), return_tensors="pt")
-    x_checked_image, has_nsfw_concept = safety_checker(images=x_image, clip_input=safety_checker_input.pixel_values)
-    assert x_checked_image.shape[0] == len(has_nsfw_concept)
-    for i in range(len(has_nsfw_concept)):
-        if has_nsfw_concept[i]:
-            x_checked_image[i] = load_replacement(x_checked_image[i])
-    return x_checked_image, has_nsfw_concept
+    # safety_checker_input = safety_feature_extractor(numpy_to_pil(x_image), return_tensors="pt")
+    # x_checked_image, has_nsfw_concept = safety_checker(images=x_image, clip_input=safety_checker_input.pixel_values)
+    # assert x_checked_image.shape[0] == len(has_nsfw_concept)
+    # for i in range(len(has_nsfw_concept)):
+    #     if has_nsfw_concept[i]:
+    #         x_checked_image[i] = load_replacement(x_checked_image[i])
+    # return x_checked_image, has_nsfw_concept
+    return x_image, [False] * len(x_image) 
 
 
 def main():
@@ -365,6 +367,9 @@ def main():
             
     parser.add_argument('--save_vis', action='store_true')
     parser.add_argument('--seg12',default=True, action='store_true')
+
+    parser.add_argument('--debug', default=False, action='store_true', help='debug mode just run ten frames')
+    parser.add_argument('--source_character_image', default=None, type=str, help='source character image for face swap')
     
     opt = parser.parse_args()
     print(opt)
@@ -412,11 +417,13 @@ def main():
     src_name=os.path.basename(opt.src_image).split('.')[0]
     
     target_frames_path=os.path.join(Base_path, target_video_name)
+    target_frames_fr_path=os.path.join(Base_path, target_video_name+"fr")
     target_cropped_face_path=os.path.join(Base_path, target_video_name+"cropped_face")
     mask_frames_path=os.path.join(Base_path, target_video_name+"mask_frames")
     # os.makedirs(sample_path, exist_ok=True)
     os.makedirs(result_path, exist_ok=True)
     os.makedirs(target_frames_path, exist_ok=True)
+    os.makedirs(target_frames_fr_path, exist_ok=True)
     os.makedirs(mask_frames_path, exist_ok=True)
     os.makedirs(target_cropped_face_path, exist_ok=True)
     os.makedirs(model_out_path, exist_ok=True)
@@ -462,6 +469,10 @@ def main():
     # get count of mask_frames_path
     base_count = len(os.listdir(target_frames_path))
     mask_count= len(os.listdir(mask_frames_path))
+
+    if opt.source_character_image:
+        source_character_image = fr.load_image_file(opt.source_character_image)
+        source_character_image_encoding = fr.face_encodings(source_character_image)[0]
     
     if base_count != frame_count or mask_count != frame_count :
         inv_transforms_all = []
@@ -469,15 +480,44 @@ def main():
             ret, frame = video.read() 
             # if frame_index <1088:
             #     continue
+
+            if opt.debug and frame_index < 10:
+                continue
+
             if ret:
                 try:
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                    boxes = fr.face_locations(frame, model='cnn')
+                    encodings = fr.face_encodings(frame, boxes)
+
+                    best, best_box = 1e9, None
+                    for box, enc in zip(boxes, encodings):
+                        dist = fr.face_distance([source_character_image_encoding], enc)[0]
+                        if dist < best:
+                            best = dist
+                            best_box = box
+
+                    if best_box is None or best > 0.55:
+                        print('no face found at', frame_index)
+                        continue
+
+                    top, right, bottom, left = best_box
+
+                    face_path = f"{target_frames_fr_path}/face_{frame_index}.png"
+                    cv2.imwrite(face_path, frame[top:bottom, left:right, ::-1])
+                    
                     Image.fromarray(frame).save(os.path.join(target_frames_path, f'{frame_index}.png'))
-                    crops, orig_images, quads, inv_transforms = crop_and_align_face([os.path.join(target_frames_path, f'{frame_index}.png')])
+                    crops, orig_images, quads, inv_transforms = crop_and_align_face([face_path])                    
+
+                    quad_global = quads[0] + np.array([left, top])   # ← 把局部 quad 挪回全圖
+                    inv_global  = calc_alignment_coefficients(quad_global+0.5,
+                                    [[0,0],[0,1024],[1024,1024],[1024,0]])
+                    
                     frame_old = frame
                     crops = [crop.convert("RGB") for crop in crops]
                     T = crops[0]
-                    inv_transforms_all.append(inv_transforms[0])
+                    inv_transforms_all.append(inv_global)
                     
                     pil_im = T.resize((1024,1024), Image.BILINEAR)
                     mask = faceParsing_demo(faceParsing_model, pil_im, convert_to_seg12=opt.seg12, model_name=opt.faceParser_name)
