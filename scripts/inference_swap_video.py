@@ -12,7 +12,7 @@ from einops import rearrange
 from torchvision.utils import make_grid
 import time
 from pytorch_lightning import seed_everything
-from torch import autocast
+from torch.amp.autocast_mode import autocast
 from contextlib import contextmanager, nullcontext
 import torchvision
 from ldm.util import instantiate_from_config
@@ -25,7 +25,7 @@ from moviepy.editor import AudioFileClip, VideoFileClip
 import proglog
 
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
-from transformers import AutoFeatureExtractor
+from transformers.models.auto.feature_extraction_auto import AutoFeatureExtractor
 
 from src.utils.alignmengt import crop_faces, calc_alignment_coefficients, crop_faces_from_image
 
@@ -474,67 +474,55 @@ def main():
         source_character_image = fr.load_image_file(opt.source_character_image)
         source_character_image_encoding = fr.face_encodings(source_character_image)[0]
     
-    if base_count != frame_count or mask_count != frame_count :
-        inv_transforms_all = []
-        for frame_index in tqdm(range(frame_count)):
-            ret, frame = video.read() 
-            # if frame_index <1088:
-            #     continue
-
-            if opt.debug and frame_index < 10:
+    inv_transforms_all = []
+    frame_index = 0
+    pbar = tqdm(total=frame_count, desc='Extracting frames')
+    while True:
+        ret, frame = video.read()
+        if not ret:
+            break
+        cv2.imwrite(os.path.join(target_frames_path, f'{frame_index}.png'), frame)
+        try:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            boxes = fr.face_locations(frame, model='cnn')
+            encodings = fr.face_encodings(frame, boxes)
+            best, best_box = 1e9, None
+            for box, enc in zip(boxes, encodings):
+                dist = fr.face_distance([source_character_image_encoding], enc)[0]
+                if dist < best:
+                    best = dist
+                    best_box = box
+            if best_box is None or best > 0.55:
+                print('no face found at', frame_index)
+                inv_transforms_all.append(None)
+                frame_index += 1
+                pbar.update(1)
                 continue
-
-            if ret:
-                try:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                    boxes = fr.face_locations(frame, model='cnn')
-                    encodings = fr.face_encodings(frame, boxes)
-
-                    best, best_box = 1e9, None
-                    for box, enc in zip(boxes, encodings):
-                        dist = fr.face_distance([source_character_image_encoding], enc)[0]
-                        if dist < best:
-                            best = dist
-                            best_box = box
-
-                    if best_box is None or best > 0.55:
-                        print('no face found at', frame_index)
-                        continue
-
-                    top, right, bottom, left = best_box
-
-                    face_path = f"{target_frames_fr_path}/face_{frame_index}.png"
-                    cv2.imwrite(face_path, frame[top:bottom, left:right, ::-1])
-                    
-                    Image.fromarray(frame).save(os.path.join(target_frames_path, f'{frame_index}.png'))
-                    crops, orig_images, quads, inv_transforms = crop_and_align_face([face_path])                    
-
-                    quad_global = quads[0] + np.array([left, top])   # ← 把局部 quad 挪回全圖
-                    inv_global  = calc_alignment_coefficients(quad_global+0.5,
-                                    [[0,0],[0,1024],[1024,1024],[1024,0]])
-                    
-                    frame_old = frame
-                    crops = [crop.convert("RGB") for crop in crops]
-                    T = crops[0]
-                    inv_transforms_all.append(inv_global)
-                    
-                    pil_im = T.resize((1024,1024), Image.BILINEAR)
-                    mask = faceParsing_demo(faceParsing_model, pil_im, convert_to_seg12=opt.seg12, model_name=opt.faceParser_name)
-                    Image.fromarray(mask).save(os.path.join(mask_frames_path, f'{frame_index}.png'))
-                    # save T
-                    T.save(os.path.join(target_cropped_face_path, f'{frame_index}.png'))
-                except:
-                    Image.fromarray(frame_old).save(os.path.join(target_frames_path, f'{frame_index}.png'))
-                    inv_transforms_all.append(inv_transforms[0])
-                    Image.fromarray(mask).save(os.path.join(mask_frames_path, f'{frame_index}.png'))
-                    # save T
-                    T.save(os.path.join(target_cropped_face_path, f'{frame_index}.png'))
-                    print('error finding face at', frame_index)
-                    pass
-        # save inv_transforms_all
-        np.save(os.path.join(Base_path,  target_video_name+'_inv_transforms.npy'), inv_transforms_all)
+            top, right, bottom, left = best_box
+            face_path = f"{target_frames_fr_path}/face_{frame_index}.png"
+            cv2.imwrite(face_path, frame[top:bottom, left:right, ::-1])
+            crops, orig_images, quads, inv_transforms = crop_and_align_face([face_path])
+            quad_global = quads[0] + np.array([left, top])
+            inv_global = calc_alignment_coefficients(quad_global + 0.5, [[0,0],[0,1024],[1024,1024],[1024,0]])
+            crops = [crop.convert("RGB") for crop in crops]
+            T = crops[0]
+            pil_im = T.resize((1024,1024), Image.BILINEAR)
+            mask = faceParsing_demo(faceParsing_model, pil_im, convert_to_seg12=opt.seg12, model_name=opt.faceParser_name)
+            Image.fromarray(mask).save(os.path.join(mask_frames_path, f'{frame_index}.png'))
+            T.save(os.path.join(target_cropped_face_path, f'{frame_index}.png'))
+            inv_transforms_all.append(inv_global)
+        except Exception as e:
+            print(f'error processing frame {frame_index}: {e}')
+            inv_transforms_all.append(None)
+        frame_index += 1
+        pbar.update(1)
+    pbar.close()
+    frame_count = frame_index
         
+    # save inv_transforms_all
+    inv_transforms_all = np.array(inv_transforms_all, dtype=object)
+    np.save(os.path.join(Base_path,  target_video_name+'_inv_transforms.npy'), inv_transforms_all, allow_pickle=True)
+    
     # load inv_transforms_all
     inv_transforms_all=np.load(os.path.join(Base_path,  target_video_name+'_inv_transforms.npy'), allow_pickle=True)
     video.release()
@@ -751,14 +739,20 @@ def main():
                             
                             orig_image=Image.open(os.path.join(target_frames_path, str(int(segment_id_batch[i]))+".png"))
                             inv_transforms=inv_transforms_all[int(segment_id_batch[i])]
+                            print("DEBUG",orig_image.size, video_shape)
                             #resize to video shape
                             if opt.only_target_crop:                
-                                inv_trans_coeffs = inv_transforms
-                                swapped_and_pasted = img.convert('RGBA')
-                                pasted_image = orig_image.convert('RGBA')
-                                swapped_and_pasted.putalpha(255)
-                                projected = swapped_and_pasted.transform(orig_image.size, Image.PERSPECTIVE, inv_trans_coeffs, Image.BILINEAR)
-                                pasted_image.alpha_composite(projected)
+                                if inv_transforms is not None:
+                                    inv_trans_coeffs = inv_transforms
+                                    swapped_and_pasted = img.convert('RGBA')
+                                    pasted_image = orig_image.convert('RGBA')
+                                    swapped_and_pasted.putalpha(255)
+                                    projected = swapped_and_pasted.transform(orig_image.size, Image.PERSPECTIVE, inv_trans_coeffs, Image.BILINEAR)
+                                    pasted_image.alpha_composite(projected)
+                                else:                                    
+                                    pasted_image = orig_image
+                            pasted_image = pasted_image.resize(video_shape, Image.BILINEAR)
+                            pasted_image = pasted_image.convert('RGB')
                             
                             # save pasted image
                             pasted_image.save(os.path.join(result_path, segment_id_batch[i]+".png"))

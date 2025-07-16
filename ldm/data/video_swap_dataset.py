@@ -29,6 +29,7 @@ from functools import partial
 import albumentations as A
 import clip
 import bezier
+import glob
 
 
 celelbAHQ_label_list = ['skin', 'nose', 'eye_g', 'l_eye', 'r_eye',
@@ -89,6 +90,7 @@ class VideoDataset(data.Dataset):
         self.label_transform=label_transform
         self.args=args
         self.load_prior=False
+        self.prior_images = []
         self.kernel = np.ones((1, 1), np.uint8)
         self.gray_outer_mask=True
         
@@ -112,9 +114,9 @@ class VideoDataset(data.Dataset):
     
         self.Fullmask=False
         # get all imgs in data_path
-        self.imgs = [osp.join(data_path, str(img)+".png") for img in range(len(os.listdir(data_path)))]
+        self.imgs = sorted(glob.glob(os.path.join(data_path, '*.png')))
         # print(self.imgs)
-        self.labels = [osp.join(mask_path, str(img)+".png") for img in range(len(os.listdir(mask_path)))]
+        self.labels = sorted(glob.glob(os.path.join(mask_path, '*.png')))
         
         assert len(self.imgs) == len(self.labels), "The number of images must be equal to the number of labels"
         
@@ -235,6 +237,7 @@ class VideoDataset(data.Dataset):
             prior_image_tensor = image_tensor
         
         if self.Fullmask:
+            ref_image_tensor = torch.zeros(1,3,224,224)
             return image_tensor,prior_image_tensor, {"inpaint_image":inpaint_tensor,"inpaint_mask":mask_img_full,"ref_imgs":ref_image_tensor},str(index).zfill(12)
     
         return image_tensor,prior_image_tensor, {"inpaint_image":inpaint_tensor,"inpaint_mask":mask_tensor},str(index).zfill(12)
@@ -289,7 +292,8 @@ class VideoDataset(data.Dataset):
         else:
             prior_image_tensor = image_tensor
     
-        return image_tensor,prior_image_tensor, {"inpaint_image":inpaint_tensor,"inpaint_mask":mask_tensor},str(index).zfill(12)
+        segment_id = os.path.splitext(os.path.basename(img_path))[0]
+        return image_tensor,prior_image_tensor, {"inpaint_image":inpaint_tensor,"inpaint_mask":mask_tensor},segment_id.zfill(12)
   
 
     def __len__(self):
