@@ -9,6 +9,7 @@ from tqdm import tqdm, trange
 # from imwatermark import WatermarkEncoder
 from itertools import islice
 from einops import rearrange
+import shutil
 from torchvision.utils import make_grid
 import time
 from pytorch_lightning import seed_everything
@@ -484,33 +485,63 @@ def main():
         cv2.imwrite(os.path.join(target_frames_path, f'{frame_index}.png'), frame)
         try:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            boxes = fr.face_locations(frame, model='cnn')
-            encodings = fr.face_encodings(frame, boxes)
-            best, best_box = 1e9, None
-            for box, enc in zip(boxes, encodings):
-                dist = fr.face_distance([source_character_image_encoding], enc)[0]
-                if dist < best:
-                    best = dist
-                    best_box = box
-            if best_box is None or best > 0.55:
+            crops, orig_images, quads = crop_faces_from_image(IMAGE_SIZE=1024, frame=frame, scale=1.0, center_sigma=0, xy_sigma=0, use_fa=False)
+            inv_transforms_local = [calc_alignment_coefficients(quad + 0.5, [[0, 0], [0, 1024], [1024, 1024], [1024, 0]]) for quad in quads]
+            
+            if len(crops) == 0:
                 print('no face found at', frame_index)
                 inv_transforms_all.append(None)
+                # Copy original frame to result path
+                original_frame_path = os.path.join(target_frames_path, f"{frame_index}.png")
+                destination_path = os.path.join(result_path, f"{frame_index}.png")
+                shutil.copy(original_frame_path, destination_path)
                 frame_index += 1
                 pbar.update(1)
                 continue
-            top, right, bottom, left = best_box
-            face_path = f"{target_frames_fr_path}/face_{frame_index}.png"
-            cv2.imwrite(face_path, frame[top:bottom, left:right, ::-1])
-            crops, orig_images, quads, inv_transforms = crop_and_align_face([face_path])
-            quad_global = quads[0] + np.array([left, top])
-            inv_global = calc_alignment_coefficients(quad_global + 0.5, [[0,0],[0,1024],[1024,1024],[1024,0]])
-            crops = [crop.convert("RGB") for crop in crops]
-            T = crops[0]
+            
+            best, best_index = 1e9, -1
+            if opt.source_character_image:
+                for idx, crop in enumerate(crops):
+                    crop_np = np.array(crop.convert("RGB"))
+                    encodings = fr.face_encodings(crop_np)
+                    if len(encodings) == 0:
+                        continue
+                    dist = fr.face_distance([source_character_image_encoding], encodings[0])[0]
+                    if dist < best:
+                        best = dist
+                        best_index = idx
+                if best_index == -1 or best > 0.55:
+                    print('no matching face found at', frame_index)
+                    inv_transforms_all.append(None)
+                    # Copy original frame to result path
+                    original_frame_path = os.path.join(target_frames_path, f"{frame_index}.png")
+                    destination_path = os.path.join(result_path, f"{frame_index}.png")
+                    shutil.copy(original_frame_path, destination_path)
+                    frame_index += 1
+                    pbar.update(1)
+                    continue
+            else:
+                if len(crops) > 0:
+                    best_index = 0
+                else:
+                    print('no face found at', frame_index)
+                    inv_transforms_all.append(None)
+                    # This block might be redundant but copying for safety
+                    original_frame_path = os.path.join(target_frames_path, f"{frame_index}.png")
+                    destination_path = os.path.join(result_path, f"{frame_index}.png")
+                    shutil.copy(original_frame_path, destination_path)
+                    frame_index += 1
+                    pbar.update(1)
+                    continue
+            
+            T = crops[best_index].convert("RGB")
+            inv_transforms_all.append(inv_transforms_local[best_index])
+            
             pil_im = T.resize((1024,1024), Image.BILINEAR)
             mask = faceParsing_demo(faceParsing_model, pil_im, convert_to_seg12=opt.seg12, model_name=opt.faceParser_name)
             Image.fromarray(mask).save(os.path.join(mask_frames_path, f'{frame_index}.png'))
+            # save T
             T.save(os.path.join(target_cropped_face_path, f'{frame_index}.png'))
-            inv_transforms_all.append(inv_global)
         except Exception as e:
             print(f'error processing frame {frame_index}: {e}')
             inv_transforms_all.append(None)
@@ -661,8 +692,9 @@ def main():
                     if (model.land_mark_id_seperate_layers or model.sep_head_att) and opt.scale != 1.0:
             
                         # concat c, landmarks
-                        landmarks=landmarks.unsqueeze(1) if len(landmarks.shape)!=3 else landmarks
-                        uc=torch.cat([uc,landmarks],dim=-1)
+                        if landmarks is not None:
+                            landmarks=landmarks.unsqueeze(1) if len(landmarks.shape)!=3 else landmarks
+                            uc=torch.cat([uc,landmarks],dim=-1)
                     
                     
                     if c.shape[-1]==1024:
@@ -739,7 +771,7 @@ def main():
                             
                             orig_image=Image.open(os.path.join(target_frames_path, str(int(segment_id_batch[i]))+".png"))
                             inv_transforms=inv_transforms_all[int(segment_id_batch[i])]
-                            print("DEBUG",orig_image.size, video_shape)
+                            
                             #resize to video shape
                             if opt.only_target_crop:                
                                 if inv_transforms is not None:
@@ -751,7 +783,7 @@ def main():
                                     pasted_image.alpha_composite(projected)
                                 else:                                    
                                     pasted_image = orig_image
-                            pasted_image = pasted_image.resize(video_shape, Image.BILINEAR)
+                            # pasted_image = pasted_image.resize(video_shape, Image.BILINEAR)
                             pasted_image = pasted_image.convert('RGB')
                             
                             # save pasted image
@@ -770,50 +802,57 @@ def main():
                         all_samples.append(x_checked_image_torch)
 
     path = os.path.join(result_path, '*.png')
-    image_filenames = sorted(glob.glob(path))
+    image_filenames = glob.glob(path)
+    # Sort filenames numerically instead of lexicographically
+    image_filenames = sorted(image_filenames, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+    
     # breakpoint()
-    clips = ImageSequenceClip(image_filenames, fps=fps)
-    name = os.path.basename(out_video_filepath)
+    if not image_filenames:
+        print("\nError: No frames found in the results directory to create a video.")
+        print(f"Please check the following directory: {result_path}")
+    else:
+        clips = ImageSequenceClip(image_filenames, fps=fps)
+        name = os.path.basename(out_video_filepath)
 
 
-    if not no_audio:
-        clips = clips.set_audio(video_audio_clip)
+        if not no_audio:
+            clips = clips.set_audio(video_audio_clip)
 
-    # if out_video_filepath.lower().endswith('.gif'):
-    #     print("\nCreating GIF with FFmpeg...")
-    #     try:
-    #        subprocess.run('ffmpeg -y -v -8 -f image2 -framerate {} \
-    #            -i "./tmp_frames/frame_%07d.png" -filter_complex "[0:v]split [a][b];[a] \
-    #                palettegen=stats_mode=single [p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
-    #                    -y "{}.gif"'.format(fps, name), shell=True, check=True)
-    #        print("\nGIF created: {}".format(out_video_filename))
+        # if out_video_filepath.lower().endswith('.gif'):
+        #     print("\nCreating GIF with FFmpeg...")
+        #     try:
+        #        subprocess.run('ffmpeg -y -v -8 -f image2 -framerate {} \
+        #            -i "./tmp_frames/frame_%07d.png" -filter_complex "[0:v]split [a][b];[a] \
+        #                palettegen=stats_mode=single [p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
+        #                    -y "{}.gif"'.format(fps, name), shell=True, check=True)
+        #        print("\nGIF created: {}".format(out_video_filename))
 
-    #     except subprocess.CalledProcessError:
-    #         print("\nERROR! Failed to export GIF with FFmpeg")
-    #         print('\n', sys.exc_info())
-    #         sys.exit(0)
+        #     except subprocess.CalledProcessError:
+        #         print("\nERROR! Failed to export GIF with FFmpeg")
+        #         print('\n', sys.exc_info())
+        #         sys.exit(0)
 
-    # elif out_video_filename.lower().endswith('.webp'):
-    #     try:
-    #         print("\nCreating WEBP with FFmpeg...")
-    #         subprocess.run('ffmpeg -y -v -8 -f image2 -framerate {} \
-    #             -i "./tmp_frames/frame_%07d.png" -vcodec libwebp -lossless 0 -q:v 80 -loop 0 -an -vsync 0 \
-    #                 "{}.webp"'.format(fps, name), shell=True, check=True)
-    #         print("\nWEBP created: {}".format(out_video_filename))
+        # elif out_video_filename.lower().endswith('.webp'):
+        #     try:
+        #         print("\nCreating WEBP with FFmpeg...")
+        #         subprocess.run('ffmpeg -y -v -8 -f image2 -framerate {} \
+        #             -i "./tmp_frames/frame_%07d.png" -vcodec libwebp -lossless 0 -q:v 80 -loop 0 -an -vsync 0 \
+        #                 "{}.webp"'.format(fps, name), shell=True, check=True)
+        #         print("\nWEBP created: {}".format(out_video_filename))
 
-    #     except subprocess.CalledProcessError:
-    #         print("\nERROR! Failed to export WEBP with FFmpeg")
-    #         print('\n', sys.exc_info())
-    #         sys.exit(0)
-    # else:
-        # breakpoint()
-    clips.write_videofile(out_video_filepath,fps=fps, codec='libx264', audio_codec='aac', ffmpeg_params=['-pix_fmt:v', 'yuv420p', '-colorspace:v', 'bt709', '-color_primaries:v', 'bt709','-color_trc:v', 'bt709', '-color_range:v', 'tv', '-movflags', '+faststart'],logger=proglog.TqdmProgressBarLogger(print_messages=False))
-        # except Exception as e:
-        #     print("\nERROR! Failed to export video")
-        #     print('\n', e)
-        #     sys.exit(0)
+        #     except subprocess.CalledProcessError:
+        #         print("\nERROR! Failed to export WEBP with FFmpeg")
+        #         print('\n', sys.exc_info())
+        #         sys.exit(0)
+        # else:
+            # breakpoint()
+        clips.write_videofile(out_video_filepath,fps=fps, codec='libx264', audio_codec='aac', ffmpeg_params=['-pix_fmt:v', 'yuv420p', '-colorspace:v', 'bt709', '-color_primaries:v', 'bt709','-color_trc:v', 'bt709', '-color_range:v', 'tv', '-movflags', '+faststart'],logger=proglog.TqdmProgressBarLogger(print_messages=False))
+            # except Exception as e:
+            #     print("\nERROR! Failed to export video")
+            #     print('\n', e)
+            #     sys.exit(0)
 
-    print('\nDone! {}'.format(out_video_filepath))
+        print('\nDone! {}'.format(out_video_filepath))
 
     print(f"Your samples are ready and waiting for you here: \n{out_video_filepath} \n"
           f" \nEnjoy.")

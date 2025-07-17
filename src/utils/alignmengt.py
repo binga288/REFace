@@ -48,12 +48,17 @@ def get_landmark(filepath, predictor, detector=None, fa=None):
             return None
         return lms[0]
 
+    if isinstance(filepath, str):
+        img = dlib.load_rgb_image(filepath)
+    elif isinstance(filepath, PIL.Image.Image):
+        img = np.array(filepath)
+    elif isinstance(filepath, np.ndarray):
+        img = filepath
+    else:
+        raise ValueError("Unsupported input type: {}".format(type(filepath)))
+
     if detector is None:
         detector = dlib.get_frontal_face_detector()
-    if isinstance(filepath, PIL.Image.Image):
-        img = np.array(filepath)
-    else:
-        img = dlib.load_rgb_image(filepath)
     dets = detector(img)
 
     for k, d in enumerate(dets):
@@ -228,12 +233,12 @@ def crop_faces_from_image(IMAGE_SIZE, frame, scale, center_sigma=0.0, xy_sigma=0
         detector = dlib.get_frontal_face_detector()
 
     cs, xs, ys = [], [], []
-    for _, path in tqdm(files):
-        c, x, y = compute_transform(path, predictor, detector=detector,
-                                    scale=scale, fa=fa)
-        cs.append(c)
-        xs.append(x)
-        ys.append(y)
+    path = frame
+    c, x, y = compute_transform(path, predictor, detector=detector,
+                                scale=scale, fa=fa)
+    cs.append(c)
+    xs.append(x)
+    ys.append(y)
 
     cs = np.stack(cs)
     xs = np.stack(xs)
@@ -248,16 +253,23 @@ def crop_faces_from_image(IMAGE_SIZE, frame, scale, center_sigma=0.0, xy_sigma=0
     quads = np.stack([cs - xs - ys, cs - xs + ys, cs + xs + ys, cs + xs - ys], axis=1)
     quads = list(quads)
 
-    crops, orig_images = crop_faces_by_quads(IMAGE_SIZE, files, quads)
+    crops, orig_images = crop_faces_by_quads(IMAGE_SIZE, [path], quads)
 
     return crops, orig_images, quads
 
 def crop_faces_by_quads(IMAGE_SIZE, files, quads):
     orig_images = []
     crops = []
-    for quad,  path in tqdm(zip(quads, files), total=len(quads)):
-        crop = crop_image(path, IMAGE_SIZE, quad.copy())
-        orig_image = Image.open(path)
+    for quad, path in tqdm(zip(quads, files), total=len(quads)):
+        if isinstance(path, str):
+            orig_image = Image.open(path)
+        elif isinstance(path, np.ndarray):
+            orig_image = Image.fromarray(path)
+        elif isinstance(path, PIL.Image.Image):
+            orig_image = path
+        else:
+            raise ValueError("Unsupported path type")
+        crop = crop_image(orig_image, IMAGE_SIZE, quad.copy())  # Pass orig_image to crop_image
         orig_images.append(orig_image)
         crops.append(crop)
     return crops, orig_images
